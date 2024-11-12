@@ -1,9 +1,11 @@
-import network
-import time
-import tools
-import machine
-import binascii
 import asyncio
+import binascii
+import time
+
+import machine
+import network
+
+import tools
 
 
 # Netzwerkeinstellungen für LAN mit DHCP konfigurieren (siehe nächster Abschnitt)
@@ -14,7 +16,7 @@ def setup_lan():
     lan.active(True)
     # lan.ifconfig('dhcp')
     print('Warte auf Netzwerkverbindung...')
-    for i in range(10):
+    for _i in range(10):
         if lan.isconnected():
             break
         time.sleep(1)
@@ -29,6 +31,7 @@ setup_lan()
 
 from microdot import Microdot, Response
 from microdot.utemplate import Template
+
 
 app = Microdot()
 Response.default_content_type = 'text/html'
@@ -79,13 +82,7 @@ async def index(request):
 
     # read registered tag information and convert the UID to a string
     store = tools.AuthorizedRFIDStore()
-    tags = [
-        [
-            tools.uid2str(i[0]),
-        ]
-        + i[1:]
-        for i in store.get_all()
-    ]
+    tags = [[tools.uid2str(i[0])] + i[1:] for i in store.get_all()]
     print(tags)
 
     # render the HTML page
@@ -97,11 +94,11 @@ async def index(request):
 async def add_tag(request):
     print('/tags PUT')
     new_tag = request.json
-    print('  {}'.format(new_tag))
+    print(f'  {new_tag}')
 
     if 'username' in new_tag and 'timestamp' in new_tag and 'collmex_id' in new_tag and 'password' in new_tag:
         # prepare the flags parameter
-        has_cash_register_access = new_tag.get('hasCashRegisterAccess') in (True, 'true', 'True', 'TRUE')
+        has_cash_register_access = new_tag.get('hasCashRegisterAccess') in {True, 'true', 'True', 'TRUE'}
         flags = 0
         if has_cash_register_access:
             flags |= tools.FLAG_CASH_REGISTER
@@ -111,23 +108,23 @@ async def add_tag(request):
         print(f'  UID: {uid}')
         if uid is None:
             return {'success': False}, 400
-        else:
-            try:
-                store = tools.AuthorizedRFIDStore()
-                if store.is_uid_registered(uid):
-                    uid_str = tools.uid2str(uid)
-                    raise ValueError(f'UID {uid_str} has already been registered!')
-                store.add(uid, new_tag['username'], new_tag['collmex_id'], new_tag['timestamp'])
-                print('  setting custom key..')
-                await tools.set_key_for_all_sectors(tools.CUSTOM_KEY, uid=uid)
-                print('  writing data to rfid tag..')
-                await tools.write_data(new_tag['username'], new_tag['collmex_id'], new_tag['password'], flags=flags, uid=uid)
-                print('  success :)')
-                return {'success': True}, 200
-            except (tools.RFIDException, ValueError) as exc:
-                print('  failure :(')
-                print(exc)
-                return {'success': False, 'msg': str(exc)}, 400
+        try:
+            store = tools.AuthorizedRFIDStore()
+            if store.is_uid_registered(uid):
+                uid_str = tools.uid2str(uid)
+                msg = f'UID {uid_str} has already been registered!'
+                raise ValueError(msg)
+            store.add(uid, new_tag['username'], new_tag['collmex_id'], new_tag['timestamp'])
+            print('  setting custom key..')
+            await tools.set_key_for_all_sectors(tools.CUSTOM_KEY, uid=uid)
+            print('  writing data to rfid tag..')
+            await tools.write_data(new_tag['username'], new_tag['collmex_id'], new_tag['password'], flags=flags, uid=uid)
+            print('  success :)')
+            return {'success': True}, 200
+        except (tools.RFIDException, ValueError) as exc:
+            print('  failure :(')
+            print(exc)
+            return {'success': False, 'msg': str(exc)}, 400
     else:
         return {'success': False, 'msg': 'Not all values have been specified!'}, 400
 
@@ -137,7 +134,7 @@ async def add_tag(request):
 async def delete_tag(request):
     print('/tags DELETE')
     params = request.args
-    print('  {}'.format(params))
+    print(f'  {params}')
 
     try:
         if 'uid' in params:

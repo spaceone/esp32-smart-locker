@@ -1,15 +1,12 @@
-import ujson
-import os
-from machine import Pin, SoftSPI
-import time
-from mfrc522 import MFRC522
-import _thread
-import random
 import asyncio
+
+import ujson
+from machine import Pin, SoftSPI
+from mfrc522 import MFRC522
 
 
 def values2hexstr(uid):
-    return '0x' + ''.join('%02X' % i for i in uid) if uid else 'unknown'
+    return '0x' + ''.join(f'{i:02X}' for i in uid) if uid else 'unknown'
 
 
 def hexstr2values(hex_string, default=None):
@@ -35,7 +32,7 @@ class SimpleINIParser:
     def _load(self):
         """Load key-value pairs from the file into a dictionary."""
         try:
-            with open(self.filename, 'r') as f:
+            with open(self.filename) as f:
                 for line in f:
                     line = line.strip()
                     if not line or line.startswith('#'):
@@ -58,8 +55,7 @@ class SimpleINIParser:
     def _save(self):
         """Save the current key-value pairs back to the file."""
         with open(self.filename, 'w') as f:
-            for key, value in self.data.items():
-                f.write(f'{key}={value}\n')
+            f.writelines(f'{key}={value}\n' for key, value in self.data.items())
 
     def set_hex(self, key, values):
         """Store a list of int values as a hex string prefixed with '0x'."""
@@ -86,9 +82,7 @@ class AuthorizedRFIDStore:
     _file = '/authorized_uids.json'
 
     def __new__(cls):
-        """
-        Ensure exactly one instance exists (Singleton pattern).
-        """
+        """Ensure exactly one instance exists (Singleton pattern)."""
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._tags = cls._instance._load()
@@ -102,17 +96,16 @@ class AuthorizedRFIDStore:
 
         Returns:
             List of RFID tag entries.
+
         """
         try:
-            with open(self._file, 'r') as f:
+            with open(self._file) as f:
                 return ujson.load(f)
         except:
             return []
 
     def _save(self):
-        """
-        Persist the current RFID tag list to the JSON file.
-        """
+        """Persist the current RFID tag list to the JSON file."""
         with open(self._file, 'w') as f:
             ujson.dump(self._tags, f)
 
@@ -125,6 +118,7 @@ class AuthorizedRFIDStore:
         Returns:
             List of RFID tag records. Each record is a list of the format:
             [<uid>, <username>, <collmex_id>, <timestamp>]
+
         """
         return self._tags
 
@@ -132,12 +126,15 @@ class AuthorizedRFIDStore:
         """
         Check whether a UID is already registered.
 
-        Parameters:
+        Parameters
+        ----------
             uid : str
                 RFID UID to check.
 
-        Returns:
+        Returns
+        -------
             True if UID exists, False otherwise.
+
         """
         return any(t[0] == uid for t in self._tags)
 
@@ -145,7 +142,8 @@ class AuthorizedRFIDStore:
         """
         Add a new authorized RFID UID. Any UID entry is unique.
 
-        Parameters:
+        Parameters
+        ----------
             uid : str
                 Unique RFID UID.
             username : str
@@ -154,6 +152,7 @@ class AuthorizedRFIDStore:
                 ID for access to the Collmex service.
             timestamp : str
                 Registration timestamp as ISO string.
+
         """
         if not self.is_uid_registered(uid):
             self._tags.append([uid, username, collmex_id, timestamp])
@@ -167,6 +166,7 @@ class AuthorizedRFIDStore:
         ----------
         uid : str
             RFID UID to remove.
+
         """
         new_tags = [t for t in self._tags if t[0] != uid]
         if len(new_tags) != len(self._tags):
@@ -202,37 +202,25 @@ FLAG_CASH_REGISTER = 0b0001
 class RFIDException(Exception):
     """Base exception class for all RFID-related errors."""
 
-    pass
-
 
 class NoCardDetectedException(RFIDException):
     """Raised when no RFID card is detected within the timeout."""
-
-    pass
 
 
 class AccessDeniedException(RFIDException):
     """Raised when an unauthorized card tries to access the system."""
 
-    pass
-
 
 class AuthenticationFailureException(RFIDException):
     """Raised when authentication with an RFID key fails."""
-
-    pass
 
 
 class ReadWriteFailureException(RFIDException):
     """Raised when reading from or writing to the RFID card fails."""
 
-    pass
-
 
 class UnexpectedMetaDataException(RFIDException):
     """Raised when the expected meta data is not as expected."""
-
-    pass
 
 
 def uid2str(uid):
@@ -251,10 +239,10 @@ def _normalize_key(key):
 
 def _normalize_uid(uid):
     if uid is None:
-        return None
+        return
     if isinstance(uid, (bytes, bytearray)):
         uid = list(uid)
-    if not isinstance(uid, list) or len(uid) not in (4, 7, 10):
+    if not isinstance(uid, list) or len(uid) not in {4, 7, 10}:
         # ISO14443A UIDs are typically 4, 7, or 10 bytes
         raise ValueError('UID must be 4/7/10 bytes (list[int]/bytes/bytearray).')
     return
@@ -267,7 +255,7 @@ def card_session(func):
     - Optional: uid/key can be passed via kwargs
     - Iterate over keys (if key not forced)
     - Re-select and stop_crypto1 between attempts
-    - Pass (uid, key, ...) into wrapped function
+    - Pass (uid, key, ...) into wrapped function.
     """
 
     async def wrapper(*args, **kwargs):
@@ -277,15 +265,12 @@ def card_session(func):
 
         async with reader_lock:
             # determine key candidates
-            if forced_key is not None:
-                key_candidates = [_normalize_key(forced_key)]
-            else:
-                key_candidates = [_normalize_key(k) for k in (DEFAULT_KEY, CUSTOM_KEY)]
+            key_candidates = [_normalize_key(forced_key)] if forced_key is not None else [_normalize_key(k) for k in (DEFAULT_KEY, CUSTOM_KEY)]
 
             for ikey in key_candidates:
                 try:
                     # try the request operation a few times, it might fail once in a while
-                    for itry in range(3):
+                    for _itry in range(3):
                         status, tag_type = reader.request(reader.CARD_REQIDL)
                         if status == reader.OK:
                             break
@@ -315,13 +300,15 @@ def card_session(func):
                         raise ReadWriteFailureException('Failed to access card UID via anticoll().')
 
                     if forced_uid is not None and uid != forced_uid:
-                        raise NoCardDetectedException('Failed to access the given UID {}.'.format(uid2str(forced_uid)))
+                        msg = f'Failed to access the given UID {uid2str(forced_uid)}.'
+                        raise NoCardDetectedException(msg)
 
                     uid_str = uid2str(uid)
 
                     # connect to the identified RFID card
                     if reader.select_tag(uid) != reader.OK:
-                        raise AccessDeniedException(f'Failed to select RFID tag with UID: {uid_str}')
+                        msg = f'Failed to select RFID tag with UID: {uid_str}'
+                        raise AccessDeniedException(msg)
 
                     # Call the wrapped function with (uid, key)
                     res = func(*args, uid=uid, key=ikey, **kwargs)
@@ -329,14 +316,15 @@ def card_session(func):
                         res = await res
                     return res
 
-                except (AuthenticationFailureException, ReadWriteFailureException) as exc:
+                except (AuthenticationFailureException, ReadWriteFailureException):
                     print(f'Access to card {uid_str} with key {ikey} failed... trying next key')
 
                 finally:
                     # keep crypto state clean after each attempt (success or fail)
                     reader.stop_crypto1()
 
-            raise AuthenticationFailureException(f'Cannot access RFID card {uid_str} with provided/known keys.')
+            msg = f'Cannot access RFID card {uid_str} with provided/known keys.'
+            raise AuthenticationFailureException(msg)
 
     return wrapper
 
@@ -369,13 +357,11 @@ def sector_session(*, is_trailer_block=False):
             sector = kwargs['sector']
 
             # choose authentication block and authenticate access
-            if is_trailer_block:
-                auth_block = get_sector_trailer(sector)
-            else:
-                auth_block = get_start_block(sector)
+            auth_block = get_sector_trailer(sector) if is_trailer_block else get_start_block(sector)
 
             if reader.auth(reader.AUTH, auth_block, key, uid) != reader.OK:
-                raise AuthenticationFailureException(f'Authentication failure (sector={sector}, block={auth_block}).')
+                msg = f'Authentication failure (sector={sector}, block={auth_block}).'
+                raise AuthenticationFailureException(msg)
 
             return func(*args, **kwargs)
 
@@ -402,15 +388,13 @@ def get_sector_trailer(sector):
     """
     if sector < 32:  # Sectors 0–31 (4-block sectors)
         return (sector * 4) + 3
-    else:  # Sectors 32–39 (16-block sectors)
-        return (sector * 16) + 15
+    # Sectors 32–39 (16-block sectors)
+    return (sector * 16) + 15
 
 
 @sector_session()
 def _write_sector(data, sector=None, uid=None, key=None):
-    """
-    Write data string (UTF-8 encoded) into the sector blocks (over all data blocks of the sector).
-    """
+    """Write data string (UTF-8 encoded) into the sector blocks (over all data blocks of the sector)."""
     start_block = get_start_block(sector)
 
     # Convert string to bytes if necessary
@@ -430,14 +414,13 @@ def _write_sector(data, sector=None, uid=None, key=None):
         block_number = start_block + (i // 16)
         block_data = data[i : i + 16]
         if reader.write(block_number, block_data) != reader.OK:
-            raise ReadWriteFailureException(f'Failed to write Block {block_number}.')
+            msg = f'Failed to write Block {block_number}.'
+            raise ReadWriteFailureException(msg)
 
 
 @sector_session()
 def _read_sector(sector=None, uid=None, key=None):
-    """
-    Read data from all blocks of the given sector and return the data as string (UTF-8 encoded).
-    """
+    """Read data from all blocks of the given sector and return the data as string (UTF-8 encoded)."""
     start_block = get_start_block(sector)
 
     # Buffer to hold the read data
@@ -451,7 +434,8 @@ def _read_sector(sector=None, uid=None, key=None):
         if block_data:
             data += bytes(block_data)  # Append the read data to the buffer
         else:
-            raise ReadWriteFailureException(f'Failed to read Block {block_number}.')
+            msg = f'Failed to read Block {block_number}.'
+            raise ReadWriteFailureException(msg)
 
     # Remove null bytes and convert to string
     return data.rstrip(b'\x00').decode('utf-8')
@@ -464,6 +448,7 @@ def read_uid(uid=None, key=None):
 
     Returns:
         list[int]: 5-byte card UID
+
     """
     return uid
 
@@ -480,6 +465,7 @@ def test_auth(uid=None, key=None):
 
     Returns:
         bool: True if all sectors authenticate successfully, False otherwise.
+
     """
     for isector in (SECTOR_META, SECTOR_USERNAME, SECTOR_COLLMEX_ID, SECTOR_PASSWORD):
         istart_block = get_start_block(isector)
@@ -504,6 +490,7 @@ def check_valid_meta_format(uid=None, key=None):
 
     Returns:
         bool: True if the metadata format is valid and the prefix matches, False otherwise.
+
     """
     meta_data = _read_sector(sector=SECTOR_META, uid=uid, key=key)
     if '_' not in meta_data:
@@ -513,10 +500,7 @@ def check_valid_meta_format(uid=None, key=None):
     if meta_prefix != config.get('meta_prefix'):
         return False
 
-    if not flags_str.isdigit():
-        return False
-
-    return True
+    return flags_str.isdigit()
 
 
 @card_session
@@ -536,6 +520,7 @@ def write_data(username, collmex_id, password, uid=None, key=None, flags=None, m
 
     Returns:
         bool: True if all sectors were written successfully.
+
     """
     if flags is None:
         flags = 0
@@ -568,6 +553,7 @@ def read_data(uid=None, key=None):
 
     Raises:
         UnexpectedMetaDataException: If the metadata format or prefix is invalid.
+
     """
     meta_data = _read_sector(sector=SECTOR_META, uid=uid, key=key)
     if '_' not in meta_data:
@@ -575,10 +561,12 @@ def read_data(uid=None, key=None):
 
     meta_prefix, flags_str = meta_data.split('_', 1)
     if meta_prefix != config.get('meta_prefix'):
-        raise UnexpectedMetaDataException(f'The prefix in the meta data sector was {meta_prefix}, however, expected is {config.get("meta_prefix")}.')
+        msg = f'The prefix in the meta data sector was {meta_prefix}, however, expected is {config.get("meta_prefix")}.'
+        raise UnexpectedMetaDataException(msg)
 
     if not flags_str.isdigit():
-        raise UnexpectedMetaDataException(f'The suffix in the meta data sector is {flags_str}, however, expected is a digit.')
+        msg = f'The suffix in the meta data sector is {flags_str}, however, expected is a digit.'
+        raise UnexpectedMetaDataException(msg)
 
     # read more data from the other sectors
     flags = int(flags_str)
@@ -587,7 +575,7 @@ def read_data(uid=None, key=None):
     password = _read_sector(sector=SECTOR_PASSWORD, uid=uid, key=key)
     print(f'Meta data: {meta_data}\nUsername: {username}\nCollmex ID: {collmex_id}')
 
-    return dict(uid=uid, username=username, collmex_id=collmex_id, password=password, flags=flags, meta_prefix=meta_prefix)
+    return {'uid': uid, 'username': username, 'collmex_id': collmex_id, 'password': password, 'flags': flags, 'meta_prefix': meta_prefix}
 
 
 @sector_session(is_trailer_block=True)
@@ -604,12 +592,14 @@ def _set_sector_key(new_key, sector=None, uid=None, key=None):
 
     Raises:
         ReadWriteFailureException: If updating the sector trailer fails.
+
     """
     new_key = _normalize_key(new_key)
     trailer_block = get_sector_trailer(sector)
     trailer = bytes(new_key + [0xFF, 0x07, 0x80, 0x69] + new_key)
     if reader.write(trailer_block, trailer) != reader.OK:
-        raise ReadWriteFailureException(f'Failed to update the key for sector {sector}.')
+        msg = f'Failed to update the key for sector {sector}.'
+        raise ReadWriteFailureException(msg)
 
 
 @card_session
@@ -625,6 +615,7 @@ def set_key_for_all_sectors(new_key, uid=None, key=None):
         uid (list[int] | None): UID of the RFID card.
         key (list[int] | None): 6-byte authentication key for the card.
             If not specified, default and custom keys are applied.
+
     """
     for isector in (SECTOR_META, SECTOR_USERNAME, SECTOR_COLLMEX_ID, SECTOR_PASSWORD):
         _set_sector_key(new_key, uid=uid, sector=isector, key=key)
@@ -650,8 +641,8 @@ async def _rfid_reading():
             if has_acccess_to_cash_register and store.is_uid_registered(rfid_data['uid']):
                 print(f'Key {rfid_data["uid"]} is authorized to open the cash register!')
                 await open_cash_register()
-                print('')
-        except NoCardDetectedException as e:
+                print()
+        except NoCardDetectedException:
             pass  # silent
         except RFIDException as e:
             print(f'Failed to read the RFID tag: {e}\n')

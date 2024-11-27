@@ -45,13 +45,13 @@ def check_basic_auth(request):
 
     # Erwartet "Basic <base64-encoded username:password>"
     try:
-        auth_type, credentials = auth.split(' ')
-        if auth_type != 'Basic':
+        auth_type, credentials = auth.split(' ', 1)
+        if auth_type.lower() != 'basic':
             return False
 
         # Base64-Dekodierung der Anmeldeinformationen
         decoded_credentials = binascii.a2b_base64(credentials).decode('utf-8')
-        username, password = decoded_credentials.split(':')
+        username, password = decoded_credentials.split(':', 1)
 
         return username == tools.config.get('username') and password == tools.config.get('password')
     except Exception:

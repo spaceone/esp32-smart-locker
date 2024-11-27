@@ -180,7 +180,6 @@ config = SimpleINIParser('config.ini')
 DEFAULT_KEY = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]
 CUSTOM_KEY = config.get_hex('key')
 
-
 sck = Pin(14, Pin.OUT)
 mosi = Pin(15, Pin.OUT)
 miso = Pin(35)
@@ -262,19 +261,23 @@ def card_session(func):
         # Optional overrides (and remove them from kwargs so func() doesn't get duplicates)
         forced_uid = kwargs.pop('uid', None) or kwargs.pop('raw_uid', None)
         forced_key = kwargs.pop('key', None)
+        n_trials = kwargs.pop('n_trials', 3)
+        time_between_trials_ms = kwargs.pop('time_between_trials_ms', 250)
+        unlocked = kwargs.pop('unlocked', False)
 
-        async with reader_lock:
+        async def _logic_wrapper():
             # determine key candidates
             key_candidates = [_normalize_key(forced_key)] if forced_key is not None else [_normalize_key(k) for k in (DEFAULT_KEY, CUSTOM_KEY)]
+            uid_str = '<unknown>'
 
             for ikey in key_candidates:
                 try:
                     # try the request operation a few times, it might fail once in a while
-                    for _itry in range(3):
+                    for _itrial in range(n_trials):
                         status, tag_type = reader.request(reader.CARD_REQIDL)
                         if status == reader.OK:
                             break
-                        await asyncio.sleep_ms(250)
+                        await asyncio.sleep_ms(time_between_trials_ms)
                     else:
                         raise NoCardDetectedException('No RFID card detected.')
 
@@ -325,6 +328,14 @@ def card_session(func):
 
             msg = f'Cannot access RFID card {uid_str} with provided/known keys.'
             raise AuthenticationFailureException(msg)
+
+        # ignore locking
+        if unlocked:
+            return await _logic_wrapper()
+
+        # respect locking
+        async with reader_lock:
+            return await _logic_wrapper()
 
     return wrapper
 

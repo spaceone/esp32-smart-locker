@@ -4,6 +4,8 @@ import time
 
 import machine
 import network
+from microdot import Microdot, Response
+from microdot.utemplate import Template
 
 import tools
 
@@ -24,13 +26,6 @@ def setup_lan():
         print('Verbunden! IP-Adresse:', lan.ifconfig()[0])
     else:
         print('Keine Netzverbindung!')
-
-
-# Rufe setup_lan auf, um das LAN mit DHCP zu aktivieren
-setup_lan()
-
-from microdot import Microdot, Response
-from microdot.utemplate import Template
 
 
 app = Microdot()
@@ -89,6 +84,22 @@ async def index(request):
     return Template('main.html').render(tags=tags)
 
 
+@app.route('/tag')
+@requires_auth
+async def get_tag(request):
+    print('/tag GET')
+
+    data = None
+    try:
+        data = await tools.read_data(n_trials=20)
+    except tools.RFIDException as e:
+        print(f'Failed to read the RFID tag: {e}\n')
+
+    if data:
+        return data, 200
+    return {}, 400
+
+
 @app.put('/tags')
 @requires_auth
 async def add_tag(request):
@@ -103,28 +114,30 @@ async def add_tag(request):
         if has_cash_register_access:
             flags |= tools.FLAG_CASH_REGISTER
 
-        # get the UID
-        uid = await tools.read_uid()
-        print(f'  UID: {uid}')
-        if uid is None:
-            return {'success': False}, 400
-        try:
-            store = tools.AuthorizedRFIDStore()
-            if store.is_uid_registered(uid):
-                uid_str = tools.uid2str(uid)
-                msg = f'UID {uid_str} has already been registered!'
-                raise ValueError(msg)
-            store.add(uid, new_tag['username'], new_tag['collmex_id'], new_tag['timestamp'])
-            print('  setting custom key..')
-            await tools.set_key_for_all_sectors(tools.CUSTOM_KEY, uid=uid)
-            print('  writing data to rfid tag..')
-            await tools.write_data(new_tag['username'], new_tag['collmex_id'], new_tag['password'], flags=flags, uid=uid)
-            print('  success :)')
-            return {'success': True}, 200
-        except (tools.RFIDException, ValueError) as exc:
-            print('  failure :(')
-            print(exc)
-            return {'success': False, 'msg': str(exc)}, 400
+        async with tools.reader_lock:
+            # get the UID
+            uid = await tools.read_uid(unlocked=True)
+
+            print(f'  UID: {uid}')
+            if uid is None:
+                return {'success': False}, 400
+            try:
+                store = tools.AuthorizedRFIDStore()
+                if store.is_uid_registered(uid):
+                    uid_str = tools.uid2str(uid)
+                    msg = f'UID {uid_str} has already been registered!'
+                    raise ValueError(msg)
+                store.add(uid, new_tag['username'], new_tag['collmex_id'], new_tag['timestamp'])
+                print('  setting custom key..')
+                await tools.set_key_for_all_sectors(tools.CUSTOM_KEY, uid=uid, unlocked=True)
+                print('  writing data to rfid tag..')
+                await tools.write_data(new_tag['username'], new_tag['collmex_id'], new_tag['password'], flags=flags, uid=uid, unlocked=True)
+                print('  success :)')
+                return {'success': True}, 200
+            except (tools.RFIDException, ValueError) as exc:
+                print('  failure :(')
+                print(exc)
+                return {'success': False, 'msg': str(exc)}, 400
     else:
         return {'success': False, 'msg': 'Not all values have been specified!'}, 400
 
@@ -137,30 +150,27 @@ async def delete_tag(request):
     print(f'  {params}')
 
     try:
-        if 'uid' in params:
-            uid = tools.hexstr2values(params['uid'])
-        else:
-            uid = await tools.read_uid()
+        async with tools.reader_lock:
+            if 'uid' in params:
+                uid = tools.hexstr2values(params['uid'])
+            else:
+                uid = await tools.read_uid(unlocked=True)
 
-        if 'reset' in params and params['reset'].lower() == 'true':
-            print('  deleting all sectors..')
-            await tools.write_data('', '', '', meta_data='', uid=uid)
-            print('  setting default key..')
-            await tools.set_key_for_all_sectors(tools.DEFAULT_KEY, uid=uid)
+            if 'reset' in params and params['reset'].lower() == 'true':
+                print('  deleting all sectors..')
+                await tools.write_data('', '', '', meta_data='', uid=uid, unlocked=True)
+                print('  setting default key..')
+                await tools.set_key_for_all_sectors(tools.DEFAULT_KEY, uid=uid, unlocked=True)
 
-        store = tools.AuthorizedRFIDStore()
-        store.remove(uid)
+            store = tools.AuthorizedRFIDStore()
+            store.remove(uid)
 
-        print('  success :)')
-        return {'success': True}, 200
+            print('  success :)')
+            return {'success': True}, 200
     except tools.RFIDException as exc:
         print('  failure :(')
         print(exc)
         return {'success': False, 'msg': str(exc)}, 400
-
-
-print('Starting RFID reading...')
-tools.start_rfid_reading()
 
 
 async def _start_web_server():
@@ -175,10 +185,21 @@ def start_web_server():
     loop.run_forever()
 
 
-# do not start the web server if the OLIMEX button has been pressed
-button_pin = machine.Pin(34, machine.Pin.IN)
-time.sleep(0.1)
-if button_pin.value() == 0:
-    print('Debug mode: Button pressed, web server will NOT start.')
-else:
-    start_web_server()
+def main():
+    # Rufe setup_lan auf, um das LAN mit DHCP zu aktivieren
+    setup_lan()
+
+    print('Starting RFID reading...')
+    tools.start_rfid_reading()
+
+    # do not start the web server if the OLIMEX button has been pressed
+    button_pin = machine.Pin(34, machine.Pin.IN)
+    time.sleep(0.1)
+    if button_pin.value() == 0:
+        print('Debug mode: Button pressed, web server will NOT start.')
+    else:
+        start_web_server()
+
+
+if __name__ == '__main__':
+    main()

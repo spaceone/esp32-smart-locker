@@ -28,7 +28,7 @@ from microdot.utemplate import Template
 
 app = Microdot()
 Response.default_content_type = 'text/html'
-USERNAME, PASSWORD = tools.load_credentials()
+
 
 # Hilfsfunktion für Basic Authentication
 def check_basic_auth(request):
@@ -46,7 +46,7 @@ def check_basic_auth(request):
         decoded_credentials = binascii.a2b_base64(credentials).decode("utf-8")
         username, password = decoded_credentials.split(":")
 
-        return username == USERNAME and password == PASSWORD
+        return username == tools.config.get('username') and password == tools.config.get('password')
     except Exception:
         return False
     
@@ -66,7 +66,7 @@ def requires_auth(handler):
 @requires_auth
 async def index(request):
     print('/test GET')
-    return Template("dummy.html").render(name='Alex')
+    return Template("dummy.html").render(name='user')
 
 
 @app.route('/')
@@ -113,5 +113,21 @@ async def delete_tag(request):
 print("Starting RFID reading...")
 tools.start_rfid_reading()
 
-print("Starting web server...")
-app.run(port=80)
+
+async def _start_web_server():
+    print("Starting web server...")
+    #app.run(port=80)
+    await app.start_server(debug=False, port=80)
+
+
+def start_web_server():
+    asyncio.run(_start_web_server())
+
+
+# do not start the web server if the OLIMEX button has been pressed
+button_pin = machine.Pin(0, machine.Pin.IN, machine.Pin.PULL_UP)
+time.sleep(0.1)
+if button_pin.value() == 0:
+    print("Debug mode: Button pressed, web server will NOT start.")
+else:
+    start_web_server()

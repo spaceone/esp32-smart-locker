@@ -66,53 +66,6 @@ class SimpleINIParser:
 
 config = SimpleINIParser("config.ini")
 
-
-# def load_credentials():
-#     with open("credentials.txt", "r") as f:
-#         username = f.readline().strip()
-#         password = f.readline().strip()
-#     return username, password
-# 
-# USERNAME, PASSWORD = load_credentials()
-# 
-#
-# def load_authorized_uids():
-#     try:
-#         with open("/authorized_uids.json", "r") as f:
-#             return ujson.load(f)
-#     except:
-#         return []
-#     
-#
-# _tags = load_authorized_uids()
-#
-# def save_authorized_uids(tags):
-#     global _tags
-#     with open("/authorized_uids.json", "w") as f:
-#         ujson.dump(tags, f)
-#     _tags = tags
-# 
-# 
-# def add_uid(uid, username, timestamp):
-#     global _tags
-#     if not is_uid_registered(uid):
-#         _tags.append(dict(uid=uid, username=username, timestamp=timestamp))
-#         save_authorized_uids(_tags)
-# 
-# 
-# def remove_uid(uid):
-#     global _tags
-#     tags = [i for i in _tags if i['uid'] != uid]
-#     if len(tags) != len(_tags):
-#         save_authorized_uids(tags)
-# 
-# 
-# def is_uid_registered(uid):
-#     global _tags
-#     uids = set([i['uid'] for i in _tags])
-#     return uid in uids
-
-
 # RFID keys
 DEFAULT_KEY = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]
 CUSTOM_KEY = config.get_hex('key')
@@ -133,8 +86,7 @@ SECTOR_COLLMEX_ID = 3
 SECTOR_PASSWORD = 4
 
 # Access flags
-FLAG_DOOR = 0b0001
-FLAG_CASH_REGISTER = 0b0010
+FLAG_CASH_REGISTER = 0b0001
 
 
 class RFIDException(Exception):
@@ -163,6 +115,151 @@ class UnexpectedMetaDataException(RFIDException):
 
 
 
+def uid2str(uid):
+    return '0x' + ''.join('%02X' % i for i in uid) if uid else "unknown"
+
+
+def _normalize_key(key):
+    if key is None:
+        return None
+    if isinstance(key, (bytes, bytearray)):
+        key = list(key)
+    if not isinstance(key, list) or len(key) != 6:
+        raise ValueError("RFID key must be 6 bytes (list[int]/bytes/bytearray).")
+    return key
+
+
+def _normalize_uid(uid):
+    if uid is None:
+        return None
+    if isinstance(uid, (bytes, bytearray)):
+        uid = list(uid)
+    if not isinstance(uid, list) or len(uid) not in (4, 7, 10):
+        # ISO14443A UIDs are typically 4, 7, or 10 bytes
+        raise ValueError("UID must be 4/7/10 bytes (list[int]/bytes/bytearray).")
+    return
+
+
+def card_session(func):
+    """
+    Decorator function for reading and accessing an RFID tag.
+    - Detect + (optional) anticoll + select_tag
+    - Optional: uid/key can be passed via kwargs
+    - Iterate over keys (if key not forced)
+    - Re-select and stop_crypto1 between attempts
+    - Pass (uid, key, ...) into wrapped function
+    """
+    async def wrapper(*args, **kwargs):
+        # Optional overrides (and remove them from kwargs so func() doesn't get duplicates)
+        forced_uid = kwargs.pop("uid", None) or kwargs.pop("raw_uid", None)
+        forced_key = kwargs.pop("key", None)
+
+        async with reader_lock:
+            # determine key candidates
+            if forced_key is not None:
+                key_candidates = [_normalize_key(forced_key)]
+            else:
+                key_candidates = [_normalize_key(k) for k in (DEFAULT_KEY, CUSTOM_KEY)]
+                            
+            for ikey in key_candidates:
+                try:
+                    # try the request operation a few times, it might fail once in a while
+                    for itry in range(3):
+                        status, tag_type = reader.request(reader.CARD_REQIDL)
+                        if status == reader.OK:
+                            break
+                    else:
+                        raise NoCardDetectedException("No RFID card detected.")
+
+                    print(f"Card detected! Tag Type: 0x{tag_type:02X}")
+                    if tag_type == 0x08:
+                        print("MIFARE Classic 1K detected.")
+                    elif tag_type == 0x10:
+                        print("MIFARE Classic 4K detected.")
+                    elif tag_type == 0x04:
+                        print("MIFARE Ultralight detected.")
+                    elif tag_type == 0x44:
+                        print("MIFARE DESFire detected.")
+                    elif tag_type == 0x20:
+                        print("MIFARE Plus detected.")
+                    elif tag_type == 0x40:
+                        print("MIFARE Mini detected.")
+                    else:
+                        print("Unknown or unsupported card type.")
+
+                    # identify accessible RFID card
+                    status, uid = reader.anticoll()
+                    if status != reader.OK or not uid:
+                        raise ReadWriteFailureException("Failed to access card UID via anticoll().")
+                    
+                    if forced_uid is not None and uid != forced_uid:
+                        raise NoCardDetectedException("Failed to access the given UID {}.".format(uid2str(forced_uid)))
+
+                    uid_str = uid2str(uid)
+
+                    # connect to the identified RFID card
+                    if reader.select_tag(uid) != reader.OK:
+                        raise AccessDeniedException(f"Failed to select RFID tag with UID: {uid_str}")
+
+                    # Call the wrapped function with (uid, key)
+                    return func(*args, uid=uid, key=ikey, **kwargs)
+
+                except (AuthenticationFailureException, ReadWriteFailureException) as exc:
+                    print(f"Access to card {uid_str} with key {ikey} failed... trying next key")
+                    
+                finally:
+                    # keep crypto state clean after each attempt (success or fail)
+                    reader.stop_crypto1()
+
+            raise AuthenticationFailureException(f"Cannot access RFID card {uid_str} with provided/known keys.") 
+
+    return wrapper
+
+
+
+def sector_session(*, is_trailer_block=False):
+    """
+    Decorator for wrapping any operation that needs an authenticated sector.
+
+    Parameters (decorator-level):
+      is_trailer_block (bool):
+        - False (default): authenticate on sector start block
+        - True: authenticate on sector trailer block
+
+    Requires kwargs at call time:
+      uid, key, sector
+    """
+
+    def deco(func):
+        def wrapper(*args, **kwargs):
+            if "uid" not in kwargs:
+                raise ValueError("Missing required keyword argument: 'uid'")
+            if "key" not in kwargs:
+                raise ValueError("Missing required keyword argument: 'key'")
+            if "sector" not in kwargs:
+                raise ValueError("Missing required keyword argument: 'sector'")
+
+            uid = kwargs["uid"]
+            key = _normalize_key(kwargs["key"])
+            kwargs["key"] = key
+            sector = kwargs["sector"]
+
+            # choose authentication block and authenticate access
+            if is_trailer_block:
+                auth_block = get_sector_trailer(sector)
+            else:
+                auth_block = get_start_block(sector)
+            
+            if reader.auth(reader.AUTH, auth_block, key, uid) != reader.OK:
+                raise AuthenticationFailureException(f"Authentication failure (sector={sector}, block={auth_block}).")
+            
+            return func(*args, **kwargs)
+
+        return wrapper
+    return deco
+
+
+
 def get_start_block(sector):
     """
     Calculate the starting block for the sector
@@ -185,7 +282,9 @@ def get_sector_trailer(sector):
         return (sector * 16) + 15
 
 
-def write_multiple_blocks(sector, data, uid, key=DEFAULT_KEY):
+
+@sector_session()
+def _write_sector(data, sector=None, uid=None, key=None):
     """
     Write data string (UTF-8 encoded) into the sector blocks (over all data blocks of the sector).
     """
@@ -203,9 +302,6 @@ def write_multiple_blocks(sector, data, uid, key=DEFAULT_KEY):
     if len(data) < 48:
         data += b'\x00' * (48 - len(data))
 
-    if reader.auth(reader.AUTH, start_block, key, uid) != reader.OK:
-        raise AuthenticationFailureException(f"Sector {sector} authentication failure.")
-    
     # Write the data block by block
     for i in range(0, 48, 16):
         block_number = start_block + (i // 16)
@@ -214,7 +310,8 @@ def write_multiple_blocks(sector, data, uid, key=DEFAULT_KEY):
             raise ReadWriteFailureException(f"Failed to write Block {block_number}.")
 
 
-def read_multiple_blocks(sector, uid, key=DEFAULT_KEY):
+@sector_session()
+def _read_sector(sector=None, uid=None, key=None):
     """
     Read data from all blocks of the given sector and return the data as string (UTF-8 encoded).
     """
@@ -223,9 +320,6 @@ def read_multiple_blocks(sector, uid, key=DEFAULT_KEY):
     # Buffer to hold the read data
     data = b''
 
-    # Authenticate for the block
-    if reader.auth(reader.AUTH, start_block, key, uid) != reader.OK:
-        raise AuthenticationFailureException(f"Sector {sector} authentication failure.")
 
     # Read the data block by block
     for i in range(3):  # 3 blocks to read
@@ -241,56 +335,8 @@ def read_multiple_blocks(sector, uid, key=DEFAULT_KEY):
     return data.rstrip(b'\x00').decode('utf-8')
 
 
-# Decorator to handle card detection
-def card_action(func):
-    """
-    Decorator function for reading and accessing an RFID tag.
-    """
-    async def wrapper(*args, **kwargs):
-        async with reader_lock:
-            status, tag_type = reader.request(reader.CARD_REQIDL)
-            if status != reader.OK:
-                raise NoCardDetectedException("No RFID card detected.")
-            
-            print(f"Card detected! Tag Type: 0x{tag_type:02X}")
-            if tag_type == 0x08:
-                print("MIFARE Classic 1K detected.")
-            elif tag_type == 0x10:
-                print("MIFARE Classic 4K detected.")
-            elif tag_type == 0x04:
-                print("MIFARE Ultralight detected.")
-            elif tag_type == 0x44:
-                print("MIFARE DESFire detected.")
-            elif tag_type == 0x20:
-                print("MIFARE Plus detected.")
-            elif tag_type == 0x40:
-                print("MIFARE Mini detected.")
-            else:
-                print("Unknown or unsupported card type.")                    
-            (status, raw_uid) = reader.anticoll()
-            uid_str = '0x' + (''.join('%02X' % i for i in raw_uid))
-            if status != reader.OK:
-                raise ReadWriteFailureException(f"Failed to access card with UID: {uid_str}")
-            
-            print(f"Card detected. UID: {uid_str}")
-            if reader.select_tag(raw_uid) != reader.OK:
-                raise AccessDeniedException(f'Failed to select RFID tag with UID: {uid_str}')
-            try:
-                # Call the decorated function with the UID
-                return func(raw_uid, *args, **kwargs)
-            finally:
-                # Ensure the crypto operation is stopped
-                reader.stop_crypto1()
-
-    return wrapper
-
-
-@card_action
-def test_auth(uid, key):
-    return _test_auth(uid, key)
-
-
-def _test_auth(uid, key):
+@card_session
+def test_auth(uid=None, key=None):
     # Authenticate with the default key
     for isector in (SECTOR_META, SECTOR_USERNAME, SECTOR_COLLMEX_ID, SECTOR_PASSWORD):
         istart_block = get_start_block(isector)
@@ -300,92 +346,78 @@ def _test_auth(uid, key):
     return True
 
 
-@card_action
-def set_key(uid, sector, old_key, new_key):
-    return _set_key(uid, sector, old_key, new_key)
-
-    
-def _set_key(uid, sector, old_key, new_key):
-    # Authenticate with the default key
-    access_block = get_sector_trailer(sector)
-    if reader.auth(reader.AUTH, access_block, old_key, uid) != reader.OK:
-        raise AuthenticationFailureException(f"Given key {old_key} does not work for sector {sector} or the card already has a custom key.")
-        
-    print(f"Given key works for sector {sector}. Resetting access block to new key.")
-    
-    # Construct the new sector trailer data
-    new_key_data = bytes(new_key + [0xFF, 0x07, 0x80, 0x69] + new_key)
-
-    # Write the new key and access conditions
-    if reader.write(access_block, new_key_data) != reader.OK:
-        raise ReadWriteFailureException(f"Failed to update the key for sector {sector}.")
-    print(f"Key updated successfully for sector {sector}.")
-
-
-@card_action
-def set_key_for_all_sectors(uid, old_key, new_key):
-    for isector in (SECTOR_META, SECTOR_USERNAME, SECTOR_COLLMEX_ID, SECTOR_PASSWORD):
-        _set_key(uid, isector, old_key, new_key)
+@card_session
+def test_custom_format(uid=None, key=None):
+    # check for the correct format and prefix of the meta data string
+    # expected format is: <PREFIX>_<FLAGS>
+    meta_data = _read_sector(sector=SECTOR_META, uid=uid, key=key)
+    return "_" in meta_data
 
 
 # Write data function
-@card_action
-def write_data(uid, username, ID, password, key=None, flags=None):
+@card_session
+def write_data(username, collmex_id, password, uid=None, key=None, flags=None):
     if flags is None:
-        flags = FLAG_DOOR | FLAG_CASH_REGISTER
-        
-    if key is None:
-        if _test_auth(uid, config.get_hex('key')):
-            print(f"Using custom key for writing data")
-            key = config.get_hex('key')
-        elif _test_auth(uid, DEFAULT_KEY):
-            print(f"Using factory default key for writing data")
-            key = DEFAULT_KEY
-        else:
-            raise AuthenticationFailureException("Cannot acccess RFID card with known keys!")
+        flags = FLAG_CASH_REGISTER
 
-    meta_data = f"{config.get('meta_prefix')}_{flags}"
-    for isector, idata in (
-            (SECTOR_META, meta_data),
-            (SECTOR_USERNAME, username),
-            (SECTOR_COLLMEX_ID, ID),
-            (SECTOR_PASSWORD, password)):
-        write_multiple_blocks(isector, idata, uid, key)
+    meta_data = "{}_{}".format(config.get('meta_prefix'), flags)
+
+    _write_sector(meta_data, uid=uid, key=key, sector=SECTOR_META)
+    _write_sector(username, uid=uid, key=key, sector=SECTOR_USERNAME)
+    _write_sector(collmex_id, uid=uid, key=key, sector=SECTOR_COLLMEX_ID)
+    _write_sector(password, uid=uid, key=key, sector=SECTOR_PASSWORD)
+    
     print("Data written successfully.")
+    return True
         
 
 # Read data function
-@card_action
-def read_data(uid, key=None):
-    print(f'key={key}')
-    if key is None:
-        print(f'#1')
-        if _test_auth(uid, config.get_hex('key')):
-            print(f"Using custom key for reading data")
-            key = config.get_hex('key')
-        elif _test_auth(uid, DEFAULT_KEY):
-            print(f"Using factory default key for writing data")
-            key = DEFAULT_KEY
-        else:
-            raise AuthenticationFailureException("Cannot acccess RFID card with known keys!")
-        print(f'key={key}')
-
+@card_session
+def read_data(uid=None, key=None):
     # check for the correct format and prefix of the meta data string
-    # expected format is: <PREFiX>_<FLAGS>
-    meta_data = read_multiple_blocks(SECTOR_META, uid, key)
+    # expected format is: <PREFIX>_<FLAGS>
+    meta_data = _read_sector(sector=SECTOR_META, uid=uid, key=key)
     if "_" not in meta_data:
         raise UnexpectedMetaDataException('The meta data sector did not match the expected format!')
-    meta_prefix, flags = meta_data.split("_", 1)
-    flags = int(flags)
+    
+    meta_prefix, flags_str = meta_data.split("_", 1)
     if not meta_prefix == config.get('meta_prefix'):
         raise UnexpectedMetaDataException(f'The prefix in the meta data sector was {meta_prefix}, however, expected was {config.get("meta_prefix")}')
     
     # read more data from the other sectors
-    username = read_multiple_blocks(SECTOR_USERNAME, uid, key)
-    collmex_id = read_multiple_blocks(SECTOR_COLLMEX_ID, uid, key)
-    password = read_multiple_blocks(SECTOR_PASSWORD, uid, key)
+    flags = int(flags_str)
+    username = _read_sector(sector=SECTOR_USERNAME, uid=uid, key=key)
+    collmex_id = _read_sector(sector=SECTOR_COLLMEX_ID, uid=uid, key=key)
+    password = _read_sector(sector=SECTOR_PASSWORD, uid=uid, key=key)
     print(f'Meta data: {meta_data}\nUsername: {username}\nCollmex ID: {collmex_id}')
-    return dict(uid=uid, username=username, collmex_id=collmex_id, password=password, flags=flags, meta_prefix=meta_prefix)
+    
+    return dict(
+        uid=uid, 
+        username=username, 
+        collmex_id=collmex_id, 
+        password=password, 
+        flags=flags, 
+        meta_prefix=meta_prefix
+    )
+
+
+@sector_session(is_trailer_block=True)
+def _set_sector_key(new_key, sector=None, uid=None, key=None):
+    """
+    Change key for a single sector trailer using current key.
+    Expects uid/key/sector via kwargs (injected or passed).
+    """
+    new_key = _normalize_key(new_key)
+    trailer_block = get_sector_trailer(sector)
+    trailer = bytes(new_key + [0xFF, 0x07, 0x80, 0x69] + new_key)
+    if reader.write(trailer_block, trailer) != reader.OK:
+        raise ReadWriteFailureException(f"Failed to update the key for sector {sector}.")
+
+
+@card_session
+def set_key_for_all_sectors(new_key, uid=None, key=None):
+    for isector in (SECTOR_META, SECTOR_USERNAME, SECTOR_COLLMEX_ID, SECTOR_PASSWORD):
+        _set_sector_key(new_key, uid=uid, sector=isector, key=key)
 
 
 async def open_cash_register():
@@ -415,6 +447,5 @@ async def _rfid_reading():
         except RFIDException as e:
             print(f"Failed to read the RFID tag: {e}\n")
         await asyncio.sleep_ms(250)
-
 
 

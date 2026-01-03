@@ -51,7 +51,7 @@ class SimpleINIParser:
                 f.write(f"{key}={value}\n")
 
     def set_hex(self, key, hex_values):
-        """Store a list of hex values as a hex string prefixed with '0x'."""
+        """Store a list of int values as a hex string prefixed with '0x'."""
         hex_string = '0x' + ''.join(f"{x:02X}" for x in hex_values)
         self.set(key, hex_string)
 
@@ -340,7 +340,17 @@ def _read_sector(sector=None, uid=None, key=None):
 
 @card_session
 def test_auth(uid=None, key=None):
-    # Authenticate with the default key
+    """
+    Authenticate all required custom card sectors.
+
+    Args:
+        uid (list[int] | None): UID of the RFID card.
+        key (list[int] | None): 6-byte authentication key for the card.
+            If not specified, default and custom keys are applied.
+
+    Returns:
+        bool: True if all sectors authenticate successfully, False otherwise.
+    """
     for isector in (SECTOR_META, SECTOR_USERNAME, SECTOR_COLLMEX_ID, SECTOR_PASSWORD):
         istart_block = get_start_block(isector)
         if reader.auth(reader.AUTH, istart_block, key, uid) != reader.OK:
@@ -350,9 +360,21 @@ def test_auth(uid=None, key=None):
 
 
 @card_session
-def test_custom_format(uid=None, key=None):
-    # check for the correct format and prefix of the meta data string
-    # expected format is: <PREFIX>_<FLAGS>
+def check_valid_meta_format(uid=None, key=None):
+    """
+    Validates the metadata sector format and prefix.
+
+    The metadata must follow the format '<PREFIX>_<FLAGS>' and the prefix
+    must match the configured meta prefix.
+
+    Args:
+        uid (list[int] | None): UID of the RFID card.
+        key (list[int] | None): 6-byte authentication key for the card.
+            If not specified, default and custom keys are applied.
+
+    Returns:
+        bool: True if the metadata format is valid and the prefix matches, False otherwise.
+    """
     meta_data = _read_sector(sector=SECTOR_META, uid=uid, key=key)
     if "_" not in meta_data:
         return False
@@ -367,9 +389,23 @@ def test_custom_format(uid=None, key=None):
     return True
 
 
-# Write data function
 @card_session
 def write_data(username, collmex_id, password, uid=None, key=None, flags=None):
+    """
+    Writes user-related data and metadata to the RFID card into separate sectors.
+
+    Args:
+        username (str): Username to store on the card.
+        collmex_id (str): Collmex identifier to store.
+        password (str): Password to store.
+        uid (list[int] | None): Explicit UID of the RFID card.
+        key (list[int] | None): 6-byte authentication key for the card.
+            If not specified, default and custom keys are applied.
+        flags (int | None): Optional metadata flags; defaults to FLAG_CASH_REGISTER.
+
+    Returns:
+        bool: True if all sectors were written successfully.
+    """
     if flags is None:
         flags = FLAG_CASH_REGISTER
 
@@ -384,11 +420,23 @@ def write_data(username, collmex_id, password, uid=None, key=None, flags=None):
     return True
         
 
-# Read data function
 @card_session
 def read_data(uid=None, key=None):
-    # check for the correct format and prefix of the meta data string
-    # expected format is: <PREFIX>_<FLAGS>
+    """
+    Reads and validates structured data from the RFID card.
+
+    Args:
+        uid (list[int] | None): Explicit UID of the RFID card.
+        key (list[int] | None): 6-byte authentication key for the card.
+            If not specified, default and custom keys are applied.
+
+    Returns:
+        dict: Dictionary containing UID, user data, metadata flags,
+              and the metadata prefix.
+
+    Raises:
+        UnexpectedMetaDataException: If the metadata format or prefix is invalid.
+    """
     meta_data = _read_sector(sector=SECTOR_META, uid=uid, key=key)
     if "_" not in meta_data:
         raise UnexpectedMetaDataException('The meta data sector did not match the expected format!')
@@ -420,8 +468,17 @@ def read_data(uid=None, key=None):
 @sector_session(is_trailer_block=True)
 def _set_sector_key(new_key, sector=None, uid=None, key=None):
     """
-    Change key for a single sector trailer using current key.
-    Expects uid/key/sector via kwargs (injected or passed).
+    Updates the authentication key for a single sector.
+
+    Args:
+        new_key (list[int] | bytes): New 6-byte key to set for the sector.
+        sector (int): Sector number whose key is updated.
+        uid (list[int] | None): UID of the RFID card.
+        key (list[int] | None): 6-byte authentication key for the card.
+            If not specified, default and custom keys are applied.
+
+    Raises:
+        ReadWriteFailureException: If updating the sector trailer fails.
     """
     new_key = _normalize_key(new_key)
     trailer_block = get_sector_trailer(sector)
@@ -432,6 +489,18 @@ def _set_sector_key(new_key, sector=None, uid=None, key=None):
 
 @card_session
 def set_key_for_all_sectors(new_key, uid=None, key=None):
+    """
+    Updates the authentication key for all application-specific sectors.
+
+    Applies the new key to the metadata, username, Collmex ID,
+    and password sectors.
+
+    Args:
+        new_key (list[int] | bytes): New 6-byte key to set for all sectors.
+        uid (list[int] | None): UID of the RFID card.
+        key (list[int] | None): 6-byte authentication key for the card.
+            If not specified, default and custom keys are applied.
+    """
     for isector in (SECTOR_META, SECTOR_USERNAME, SECTOR_COLLMEX_ID, SECTOR_PASSWORD):
         _set_sector_key(new_key, uid=uid, sector=isector, key=key)
 
@@ -463,5 +532,6 @@ async def _rfid_reading():
         except RFIDException as e:
             print(f"Failed to read the RFID tag: {e}\n")
         await asyncio.sleep_ms(250)
+
 
 

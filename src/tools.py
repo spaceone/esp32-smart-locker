@@ -202,8 +202,11 @@ def card_session(func):
                         raise AccessDeniedException(f"Failed to select RFID tag with UID: {uid_str}")
 
                     # Call the wrapped function with (uid, key)
-                    return func(*args, uid=uid, key=ikey, **kwargs)
-
+                    res = func(*args, uid=uid, key=ikey, **kwargs)
+                    if hasattr(res, "__await__"):
+                        res = await res
+                    return res
+                
                 except (AuthenticationFailureException, ReadWriteFailureException) as exc:
                     print(f"Access to card {uid_str} with key {ikey} failed... trying next key")
                     
@@ -351,7 +354,17 @@ def test_custom_format(uid=None, key=None):
     # check for the correct format and prefix of the meta data string
     # expected format is: <PREFIX>_<FLAGS>
     meta_data = _read_sector(sector=SECTOR_META, uid=uid, key=key)
-    return "_" in meta_data
+    if "_" not in meta_data:
+        return False
+    
+    meta_prefix, flags_str = meta_data.split("_", 1)
+    if meta_prefix != config.get('meta_prefix'):
+        return False
+    
+    if not flags_str.isdigit():
+        return False
+    
+    return True
 
 
 # Write data function
@@ -381,9 +394,12 @@ def read_data(uid=None, key=None):
         raise UnexpectedMetaDataException('The meta data sector did not match the expected format!')
     
     meta_prefix, flags_str = meta_data.split("_", 1)
-    if not meta_prefix == config.get('meta_prefix'):
-        raise UnexpectedMetaDataException(f'The prefix in the meta data sector was {meta_prefix}, however, expected was {config.get("meta_prefix")}')
-    
+    if meta_prefix != config.get('meta_prefix'):
+        raise UnexpectedMetaDataException(f'The prefix in the meta data sector was {meta_prefix}, however, expected is {config.get("meta_prefix")}.')
+
+    if not flags_str.isdigit():
+        raise UnexpectedMetaDataException(f'The suffix in the meta data sector is {flags_str}, however, expected is a digit.')
+        
     # read more data from the other sectors
     flags = int(flags_str)
     username = _read_sector(sector=SECTOR_USERNAME, uid=uid, key=key)

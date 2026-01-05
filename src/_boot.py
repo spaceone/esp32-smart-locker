@@ -6,7 +6,8 @@ import binascii
 
 # Netzwerkeinstellungen für LAN mit DHCP konfigurieren (siehe nächster Abschnitt)
 def setup_lan():
-    network.hostname("mio-cash-register")
+    hostname = tools.config.get("hostname")
+    network.hostname(hostname)
     lan = network.LAN(mdc = machine.Pin(23), mdio = machine.Pin(18), power = machine.Pin(12), phy_type = network.PHY_LAN8720, phy_addr = 0)
     lan.active(True)
     #lan.ifconfig('dhcp')
@@ -85,12 +86,12 @@ async def add_tag(request):
     new_tag = request.json
     print('  {}'.format(new_tag))
     
-    if 'username' in new_tag and 'timestamp' in new_tag:
+    if 'username' in new_tag and 'timestamp' in new_tag and 'collmex_id' in new_tag and 'password' in new_tag:
         uid = await tools.read_uid()
         if uid is None:
             return {'success': False}, 400
         else:
-            tools.add_uid(uid, new_tag['username'], new_tag['timestamp'])
+            tools.add_uid(uid, new_tag['username'], new_tag['collmex_id'], new_tag['password'], ['timestamp'])
             return {'success': True}, 200
     else:
         return {'success': False}, 400
@@ -121,7 +122,9 @@ async def _start_web_server():
 
 
 def start_web_server():
-    asyncio.run(_start_web_server())
+    loop = asyncio.get_event_loop()
+    loop.create_task(_start_web_server())
+    loop.run_forever()
 
 
 # do not start the web server if the OLIMEX button has been pressed

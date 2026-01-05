@@ -168,6 +168,7 @@ def card_session(func):
                         status, tag_type = reader.request(reader.CARD_REQIDL)
                         if status == reader.OK:
                             break
+                        await asyncio.sleep_ms(250)
                     else:
                         raise NoCardDetectedException("No RFID card detected.")
 
@@ -336,6 +337,17 @@ def _read_sector(sector=None, uid=None, key=None):
 
     # Remove null bytes and convert to string
     return data.rstrip(b'\x00').decode('utf-8')
+
+
+@card_session
+def read_uid(uid=None, key=None):
+    """
+    Reads and returns the UID of the RFID card.
+    
+    Returns:
+        list[int]: 5-byte card UID
+    """
+    return uid
 
 
 @card_session

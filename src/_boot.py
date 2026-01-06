@@ -104,7 +104,7 @@ async def add_tag(request):
         else:
             try:
                 print('  setting custom key..')
-                await tools.set_key_for_all_sectors(tools.CUSTOM_KEY)
+                await tools.set_key_for_all_sectors(tools.CUSTOM_KEY, uid=uid)
                 print('  writing data to rfid tag..')
                 await tools.write_data(new_tag['username'], new_tag['collmex_id'], new_tag['password'], uid=uid)
                 store = tools.AuthorizedRFIDStore()
@@ -114,9 +114,15 @@ async def add_tag(request):
             except tools.RFIDException as exc:
                 print('  failure :(')
                 print(exc)
-                return {'success': False}, 400
+                return {
+                    'success': False,
+                    'msg': str(exc)
+                }, 400
     else:
-        return {'success': False}, 400
+        return {
+            'success': False,
+            'msg': 'Not all values have been specified!'
+        }, 400
     
 
 @app.delete('/tags')
@@ -126,13 +132,31 @@ async def delete_tag(request):
     params = request.args
     print('  {}'.format(params))
     
-    if 'uid' in params:
-        uid = tools.hexstr2values(params['uid'])
+    try:
+        if 'uid' in params:
+            uid = tools.hexstr2values(params['uid'])
+        else:
+            uid = await tools.read_uid()
+            
+        if 'reset' in params and params['reset'].lower() == 'true':
+            print('  deleting all sectors..')
+            await tools.write_data('', '', '', meta_data='', uid=uid)
+            print('  setting default key..')
+            await tools.set_key_for_all_sectors(tools.DEFAULT_KEY, uid=uid)
+
         store = tools.AuthorizedRFIDStore()
         store.remove(uid)
+        
+        print('  success :)')
         return {'success': True}, 200
-    else:
-        return {'success': False}, 400
+    except tools.RFIDException as exc:
+        print('  failure :(')
+        print(exc)
+        return {
+            'success': False,
+            'msg': str(exc)
+        }, 400
+    
 
 
 print("Starting RFID reading...")

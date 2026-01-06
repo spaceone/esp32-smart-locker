@@ -67,10 +67,10 @@
             <input type="text" id="collmex_id" class="form-control" placeholder="Collmex ID">
             <input type="password" id="password" class="form-control" placeholder="Passwort">
             <input type="password" id="password2" class="form-control" placeholder="Wiederholung">
-                <button class="btn btn-primary" type="button" onclick="registerTag()">Tag registrieren</button>
+            <button class="btn btn-primary" type="button" onclick="registerTag()">Tag registrieren</button>
+            <button class="btn btn-danger mt-3" type="button" onclick="resetTag()">Tag zurücksetzen</button>
         </div>
     </div>
-        </div>
 
     <!-- JavaScript to handle tag removal -->
     <script>
@@ -145,6 +145,24 @@
                 } else {
                    hideLoadingOverlay()
                    alert('Der Tag konnte nicht entfernt werden!');
+                }
+            })
+            .catch(error => console.error('Error:', error));
+        }
+        
+        function resetTag(uid) {
+            showLoadingOverlay()
+            fetch('tags?reset=true', {
+                method: 'DELETE'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert('Tag wurde erfolgreich zurückgesetzt.');
+                    location.reload();
+                } else {
+                   hideLoadingOverlay()
+                   alert('Der Tag konnte nicht zurückgesetzt werden!');
                 }
             })
             .catch(error => console.error('Error:', error));

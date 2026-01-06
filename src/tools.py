@@ -520,7 +520,7 @@ def check_valid_meta_format(uid=None, key=None):
 
 
 @card_session
-def write_data(username, collmex_id, password, uid=None, key=None, flags=None):
+def write_data(username, collmex_id, password, uid=None, key=None, flags=None, meta_data=None):
     """
     Writes user-related data and metadata to the RFID card into separate sectors.
 
@@ -532,14 +532,16 @@ def write_data(username, collmex_id, password, uid=None, key=None, flags=None):
         key (list[int] | None): 6-byte authentication key for the card.
             If not specified, default and custom keys are applied.
         flags (int | None): Optional metadata flags; defaults to FLAG_CASH_REGISTER.
+        meta_data (str | None): Optional string for the meta data field.
 
     Returns:
         bool: True if all sectors were written successfully.
     """
     if flags is None:
-        flags = FLAG_CASH_REGISTER
+        flags = 0
 
-    meta_data = "{}_{}".format(config.get('meta_prefix'), flags)
+    if meta_data is None:
+        meta_data = "{}_{}".format(config.get('meta_prefix'), flags)
 
     _write_sector(meta_data, uid=uid, key=key, sector=SECTOR_META)
     _write_sector(username, uid=uid, key=key, sector=SECTOR_USERNAME)

@@ -135,7 +135,7 @@
                     location.reload();
                 } else {
                     hideLoadingOverlay()
-                    alert('Tag konnte nicht registriert werden');
+                    alert('Tag konnte nicht registriert werden: ' + data.msg);
                 }
             })
             .catch(error => console.error('Fehler:', error));

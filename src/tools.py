@@ -150,11 +150,11 @@ class AuthorizedRFIDStore:
 
     def add(self, uid, username, collmex_id, timestamp):
         """
-        Add a new authorized RFID UID.
-
+        Add a new authorized RFID UID. Any UID entry is unique.
+        
         Parameters:
             uid : str
-                RFID UID.
+                Unique RFID UID.
             username : str
                 Human-readable user name for the web frontend.
             collmex_id : str

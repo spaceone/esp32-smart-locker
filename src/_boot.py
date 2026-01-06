@@ -110,15 +110,18 @@ async def add_tag(request):
             return {'success': False}, 400
         else:
             try:
+                store = tools.AuthorizedRFIDStore()
+                if store.is_uid_registered(uid):
+                    uid_str = tools.uid2str(uid)
+                    raise ValueError(f'UID {uid_str} has already been registered!')
+                store.add(uid, new_tag['username'], new_tag['collmex_id'], new_tag['timestamp'])
                 print('  setting custom key..')
                 await tools.set_key_for_all_sectors(tools.CUSTOM_KEY, uid=uid)
                 print('  writing data to rfid tag..')
                 await tools.write_data(new_tag['username'], new_tag['collmex_id'], new_tag['password'], flags=flags, uid=uid)
-                store = tools.AuthorizedRFIDStore()
-                store.add(uid, new_tag['username'], new_tag['collmex_id'], new_tag['timestamp'])
                 print('  success :)')
                 return {'success': True}, 200
-            except tools.RFIDException as exc:
+            except (tools.RFIDException, ValueError)  as exc:
                 print('  failure :(')
                 print(exc)
                 return {

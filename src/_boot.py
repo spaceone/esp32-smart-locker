@@ -97,6 +97,13 @@ async def add_tag(request):
     print('  {}'.format(new_tag))
     
     if 'username' in new_tag and 'timestamp' in new_tag and 'collmex_id' in new_tag and 'password' in new_tag:
+        # prepare the flags parameter
+        has_cash_register_access = new_tag.get('hasCashRegisterAccess') in (True, 'true', 'True', 'TRUE');
+        flags = 0
+        if has_cash_register_access:
+            flags |= tools.FLAG_CASH_REGISTER
+            
+        # get the UID
         uid = await tools.read_uid()
         print(f'  UID: {uid}')
         if uid is None:
@@ -106,7 +113,7 @@ async def add_tag(request):
                 print('  setting custom key..')
                 await tools.set_key_for_all_sectors(tools.CUSTOM_KEY, uid=uid)
                 print('  writing data to rfid tag..')
-                await tools.write_data(new_tag['username'], new_tag['collmex_id'], new_tag['password'], uid=uid)
+                await tools.write_data(new_tag['username'], new_tag['collmex_id'], new_tag['password'], flags=flags, uid=uid)
                 store = tools.AuthorizedRFIDStore()
                 store.add(uid, new_tag['username'], new_tag['collmex_id'], new_tag['timestamp'])
                 print('  success :)')
@@ -182,4 +189,5 @@ if button_pin.value() == 0:
     print("Debug mode: Button pressed, web server will NOT start.")
 else:
     start_web_server()
+
 

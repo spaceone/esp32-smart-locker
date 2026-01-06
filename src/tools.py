@@ -8,6 +8,18 @@ import random
 import asyncio
 
 
+def values2hexstr(uid):
+    return '0x' + ''.join('%02X' % i for i in uid) if uid else "unknown"
+
+
+def hexstr2values(hex_string, default=None):
+    if hex_string is None or not hex_string.startswith("0x"):
+        return default
+    hex_string = hex_string[2:]  # Remove '0x' prefix
+    return [int(hex_string[i:i+2], 16) for i in range(0, len(hex_string), 2)]
+    
+
+
 class SimpleINIParser:
     """
     A simple INI-style configuration file parser.
@@ -50,18 +62,124 @@ class SimpleINIParser:
             for key, value in self.data.items():
                 f.write(f"{key}={value}\n")
 
-    def set_hex(self, key, hex_values):
+    def set_hex(self, key, values):
         """Store a list of int values as a hex string prefixed with '0x'."""
-        hex_string = '0x' + ''.join(f"{x:02X}" for x in hex_values)
+        hex_string = values2hexstr(values)
         self.set(key, hex_string)
 
     def get_hex(self, key, default=None):
         """Retrieve a hex string prefixed with '0x' and convert it back to a list of integers."""
         hex_string = self.get(key, default)
-        if hex_string is None or not hex_string.startswith("0x"):
-            return default
-        hex_string = hex_string[2:]  # Remove '0x' prefix
-        return [int(hex_string[i:i+2], 16) for i in range(0, len(hex_string), 2)]
+        return hexstr2values(hex_string, default)
+
+
+class AuthorizedRFIDStore:
+    """
+    Singleton store for authorized RFID tags.
+
+    Handles:
+    - Persistent storage in JSON file
+    - In-memory caching
+    - Basic CRUD operations on RFID UIDs
+    """
+
+    _instance = None
+    _file = "/authorized_uids.json"
+
+
+    def __new__(cls):
+        """
+        Ensure exactly one instance exists (Singleton pattern).
+        """
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._tags = cls._instance._load()
+        return cls._instance
+
+
+    # ---------- internal ----------
+
+    def _load(self):
+        """
+        Load authorized RFID tags from JSON file.
+
+        Returns:
+            List of RFID tag entries.
+        """
+        try:
+            with open(self._file, "r") as f:
+                return ujson.load(f)
+        except:
+            return []
+
+
+    def _save(self):
+        """
+        Persist the current RFID tag list to the JSON file.
+        """
+        with open(self._file, "w") as f:
+            ujson.dump(self._tags, f)
+
+
+    # ---------- public API ----------
+
+    def get_all(self):
+        """
+        Return all authorized RFID tags.
+
+        Returns:
+            List of RFID tag records. Each record is a list of the format:
+            [<uid>, <username>, <collmex_id>, <timestamp>]
+        """
+        return self._tags
+
+
+    def is_uid_registered(self, uid):
+        """
+        Check whether a UID is already registered.
+
+        Parameters:
+            uid : str
+                RFID UID to check.
+
+        Returns:
+            True if UID exists, False otherwise.
+        """
+        return any(t[0] == uid for t in self._tags)
+
+
+    def add(self, uid, username, collmex_id, timestamp):
+        """
+        Add a new authorized RFID UID.
+
+        Parameters:
+            uid : str
+                RFID UID.
+            username : str
+                Human-readable user name for the web frontend.
+            collmex_id : str
+                ID for access to the Collmex service.
+            timestamp : str
+                Registration timestamp as ISO string.
+        """
+        if not self.is_uid_registered(uid):
+            self._tags.append([uid, username, collmex_id, timestamp])
+            self._save()
+
+
+    def remove(self, uid):
+        """
+        Remove an RFID UID from the authorized list.
+
+        Parameters
+        ----------
+        uid : str
+            RFID UID to remove.
+        """
+        new_tags = [t for t in self._tags if t[0] != uid]
+        if len(new_tags) != len(self._tags):
+            self._tags = new_tags
+            self._save()
 
 
 config = SimpleINIParser("config.ini")
@@ -116,7 +234,7 @@ class UnexpectedMetaDataException(RFIDException):
 
 
 def uid2str(uid):
-    return '0x' + ''.join('%02X' % i for i in uid) if uid else "unknown"
+    return values2hexstr(uid)
 
 
 def _normalize_key(key):
@@ -529,13 +647,12 @@ def start_rfid_reading():
 
 
 async def _rfid_reading():
+    store = AuthorizedRFIDStore()
     while True:
         try:
-            # TODO: Change key
-            # TODO: Check blocking list
-            rfid_data = await read_data(DEFAULT_KEY)
+            rfid_data = await read_data()
             has_acccess_to_cash_register = rfid_data["flags"] & FLAG_CASH_REGISTER
-            if has_acccess_to_cash_register:
+            if has_acccess_to_cash_register and store.is_uid_registered(rfid_data['uid']):
                 print(f"Key {rfid_data['uid']} is authorized to open the cash register!")
                 await open_cash_register()
                 print("")
@@ -544,6 +661,7 @@ async def _rfid_reading():
         except RFIDException as e:
             print(f"Failed to read the RFID tag: {e}\n")
         await asyncio.sleep_ms(250)
+
 
 
 

@@ -46,12 +46,12 @@
             <tbody>
                 {% for tag in tags %}
                 <tr>
-                    <td>{{ tag['uid'] }}</td>
-                    <td>{{ tag['username'] }}</td>
-                    <td>{{ tag['collmex_id'] }}</td>
-                    <td>{{ tag['timestamp'] }}</td>
+                    <td>{{ tag[0] }}</td>
+                    <td>{{ tag[1] }}</td>
+                    <td>{{ tag[2] }}</td>
+                    <td>{{ tag[3] }}</td>
                     <td>
-                        <button class="btn btn-danger btn-sm" onclick="removeTag('{{ tag['uid'] }}')">
+                        <button class="btn btn-danger btn-sm" onclick="removeTag('{{ tag[0] }}')">
                             Löschen
                         </button>
                     </td>
@@ -164,3 +164,4 @@
     </script>
 </body>
 </html>
+

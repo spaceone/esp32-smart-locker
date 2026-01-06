@@ -3,6 +3,8 @@ import time
 import tools
 import machine
 import binascii
+import asyncio
+
 
 # Netzwerkeinstellungen für LAN mit DHCP konfigurieren (siehe nächster Abschnitt)
 def setup_lan():
@@ -74,8 +76,16 @@ async def index(request):
 @requires_auth
 async def index(request):
     print('/ GET')
-    tags = tools.load_authorized_uids()
+    
+    # read registered tag information and convert the UID to a string
+    store = tools.AuthorizedRFIDStore()
+    tags = [
+        [tools.uid2str(i[0]),] + i[1:]
+        for i in store.get_all()
+    ]
     print(tags)
+    
+    # render the HTML page
     return Template("main.html").render(tags=tags)
 
 
@@ -88,11 +98,23 @@ async def add_tag(request):
     
     if 'username' in new_tag and 'timestamp' in new_tag and 'collmex_id' in new_tag and 'password' in new_tag:
         uid = await tools.read_uid()
+        print(f'  UID: {uid}')
         if uid is None:
             return {'success': False}, 400
         else:
-            tools.add_uid(uid, new_tag['username'], new_tag['collmex_id'], new_tag['password'], ['timestamp'])
-            return {'success': True}, 200
+            try:
+                print('  setting custom key..')
+                await tools.set_key_for_all_sectors(tools.CUSTOM_KEY)
+                print('  writing data to rfid tag..')
+                await tools.write_data(new_tag['username'], new_tag['collmex_id'], new_tag['password'], uid=uid)
+                store = tools.AuthorizedRFIDStore()
+                store.add(uid, new_tag['username'], new_tag['collmex_id'], new_tag['timestamp'])
+                print('  success :)')
+                return {'success': True}, 200
+            except tools.RFIDException as exc:
+                print('  failure :(')
+                print(exc)
+                return {'success': False}, 400
     else:
         return {'success': False}, 400
     
@@ -105,7 +127,9 @@ async def delete_tag(request):
     print('  {}'.format(params))
     
     if 'uid' in params:
-        tools.remove_uid(params['uid'])
+        uid = tools.hexstr2values(params['uid'])
+        store = tools.AuthorizedRFIDStore()
+        store.remove(uid)
         return {'success': True}, 200
     else:
         return {'success': False}, 400
@@ -128,9 +152,10 @@ def start_web_server():
 
 
 # do not start the web server if the OLIMEX button has been pressed
-button_pin = machine.Pin(0, machine.Pin.IN, machine.Pin.PULL_UP)
+button_pin = machine.Pin(34, machine.Pin.IN)
 time.sleep(0.1)
 if button_pin.value() == 0:
     print("Debug mode: Button pressed, web server will NOT start.")
 else:
     start_web_server()
+
